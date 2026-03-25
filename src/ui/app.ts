@@ -652,7 +652,7 @@ export class QuotaManagerApp {
     await this.runTask('Loading logs...', async () => {
       const logText = await readLogs();
       this.logBox.setContent(logText);
-      this.logBox.setScrollPerc(100);
+      this.resetScrollableBox(this.logBox);
       this.logBox.show();
       this.setStatus('Loaded application logs.');
     });
@@ -896,6 +896,17 @@ export class QuotaManagerApp {
       idToken: account.idToken,
       expiresAt: account.expiresAt?.getTime(),
     };
+  }
+
+  private resetScrollableBox(box: any): void {
+    if (typeof box.scrollTo === 'function') {
+      box.scrollTo(0);
+      return;
+    }
+
+    if (typeof box.setScroll === 'function') {
+      box.setScroll(0);
+    }
   }
 
   private async persistTokensAfterFailedQuotaRefresh(

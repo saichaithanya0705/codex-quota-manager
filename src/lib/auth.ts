@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import http from 'node:http';
+import https from 'node:https';
 import { spawn } from 'node:child_process';
 import { URLSearchParams } from 'node:url';
 import type { Account } from './models.js';
@@ -43,7 +44,7 @@ export async function refreshAccessToken(account: Account): Promise<Account> {
     throw new Error('Cannot refresh token without a client ID. Re-login is required.');
   }
 
-  const response = await fetch(TOKEN_URL, {
+  const response = await requestJson<TokenExchangeResponse>(TOKEN_URL, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -56,12 +57,12 @@ export async function refreshAccessToken(account: Account): Promise<Account> {
     }),
   });
 
-  if (!response.ok) {
-    logError('auth.refresh', 'Token refresh failed.', { accountId: account.accountId, status: response.status });
-    throw new Error(`Token refresh failed with status ${response.status}: ${truncate((await response.text()).trim(), 500)}`);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    logError('auth.refresh', 'Token refresh failed.', { accountId: account.accountId, status: response.statusCode });
+    throw new Error(`Token refresh failed with status ${response.statusCode}: ${truncate(response.bodyText.trim(), 500)}`);
   }
 
-  const payload = (await response.json()) as TokenExchangeResponse;
+  const payload = response.json;
   if (!payload.access_token?.trim()) {
     throw new Error('Refresh response did not include a new access token.');
   }
@@ -285,26 +286,26 @@ async function exchangeCodeForToken(code: string, verifier: string): Promise<Tok
     redirect_uri: REDIRECT_URI,
   });
 
-  const response = await fetch(TOKEN_URL, {
+  const response = await requestJson<TokenExchangeResponse>(TOKEN_URL, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body,
+    body: body.toString(),
   });
 
-  if (!response.ok) {
-    logError('auth.login', 'Token exchange failed.', { status: response.status });
-    throw new Error(`Token exchange failed with status ${response.status}: ${truncate((await response.text()).trim(), 500)}`);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    logError('auth.login', 'Token exchange failed.', { status: response.statusCode });
+    throw new Error(`Token exchange failed with status ${response.statusCode}: ${truncate(response.bodyText.trim(), 500)}`);
   }
 
   logInfo('auth.login', 'Token exchange completed.');
-  return (await response.json()) as TokenExchangeResponse;
+  return response.json;
 }
 
 async function fetchCurrentUser(accessToken: string): Promise<{ email: string; name: string }> {
-  const response = await fetch('https://api.openai.com/v1/me', {
+  const response = await requestJson<MeResponse>('https://api.openai.com/v1/me', {
     method: 'GET',
     headers: {
       Accept: 'application/json',
@@ -312,12 +313,12 @@ async function fetchCurrentUser(accessToken: string): Promise<{ email: string; n
     },
   });
 
-  if (!response.ok) {
-    logError('auth.login', 'Fetching current user profile failed.', { status: response.status });
-    throw new Error(`Failed to fetch user profile: ${response.status} ${truncate((await response.text()).trim(), 300)}`);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    logError('auth.login', 'Fetching current user profile failed.', { status: response.statusCode });
+    throw new Error(`Failed to fetch user profile: ${response.statusCode} ${truncate(response.bodyText.trim(), 300)}`);
   }
 
-  const payload = (await response.json()) as MeResponse;
+  const payload = response.json;
   return {
     email: asString(payload.email).trim(),
     name: asString(payload.name).trim(),
@@ -343,6 +344,67 @@ function buildAuthorizeUrl(state: string, challenge: string): string {
 
 function randomBase64Url(size: number): string {
   return randomBytes(size).toString('base64url');
+}
+
+type HttpJsonResponse<T> = {
+  statusCode: number;
+  bodyText: string;
+  json: T;
+};
+
+async function requestJson<T>(
+  url: string,
+  options: {
+    method: 'GET' | 'POST';
+    headers: Record<string, string>;
+    body?: string;
+  },
+): Promise<HttpJsonResponse<T>> {
+  const target = new URL(url);
+
+  return await new Promise<HttpJsonResponse<T>>((resolve, reject) => {
+    const request = https.request(target, {
+      method: options.method,
+      headers: options.body
+        ? {
+            ...options.headers,
+            'Content-Length': Buffer.byteLength(options.body).toString(),
+          }
+        : options.headers,
+    }, (response) => {
+      const chunks: Buffer[] = [];
+
+      response.on('data', (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+
+      response.on('end', () => {
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        let json: T;
+
+        try {
+          json = bodyText ? JSON.parse(bodyText) as T : {} as T;
+        } catch (error) {
+          reject(new Error(`Expected JSON response from ${target.hostname} but received invalid JSON: ${formatErrorForLog(error)}`));
+          return;
+        }
+
+        resolve({
+          statusCode: response.statusCode ?? 0,
+          bodyText,
+          json,
+        });
+      });
+    });
+
+    request.once('error', reject);
+
+    if (options.body) {
+      request.write(options.body);
+    }
+
+    request.end();
+  });
 }
 
 async function openExternal(url: string): Promise<void> {
