@@ -1,0 +1,54 @@
+{
+  "name": "codex-quota-manager",
+  "version": "0.1.0",
+  "description": "Cross-platform Node TUI for managing Codex accounts and quota usage.",
+  "license": "MIT",
+  "homepage": "https://github.com/saichaithanya0705/codex-quota-manager#readme",
+  "bugs": {
+    "url": "https://github.com/saichaithanya0705/codex-quota-manager/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saichaithanya0705/codex-quota-manager.git"
+  },
+  "keywords": [
+    "codex",
+    "tui",
+    "quota",
+    "account-switcher",
+    "openai",
+    "terminal"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "cqm": "./dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "neo-neo-blessed": "^0.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.1"
+  }
+}
