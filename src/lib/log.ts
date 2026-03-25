@@ -71,7 +71,9 @@ export async function waitForLogWrites(): Promise<void> {
 export function formatErrorForLog(error: unknown): string {
   if (error instanceof Error) {
     const parts = [error.name, error.message].filter(Boolean);
-    return truncate(parts.join(': '), 800);
+    const cause = formatErrorCause(error);
+    const rendered = cause ? `${parts.join(': ')} | cause: ${cause}` : parts.join(': ');
+    return truncate(rendered, 800);
   }
 
   return truncate(String(error), 800);
@@ -121,6 +123,31 @@ function formatDetails(details: unknown): string {
   } catch {
     return truncate(String(details), 1200);
   }
+}
+
+function formatErrorCause(error: Error): string {
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (!cause) {
+    return '';
+  }
+
+  if (cause instanceof Error) {
+    const code = typeof (cause as Error & { code?: unknown }).code === 'string'
+      ? (cause as Error & { code?: string }).code
+      : '';
+    const parts = [code, cause.name, cause.message].filter(Boolean);
+    return parts.join(': ');
+  }
+
+  if (typeof cause === 'object') {
+    try {
+      return JSON.stringify(cause);
+    } catch {
+      return String(cause);
+    }
+  }
+
+  return String(cause);
 }
 
 async function readLogTail(filePath: string, maxBytes: number): Promise<{ content: string; truncated: boolean }> {

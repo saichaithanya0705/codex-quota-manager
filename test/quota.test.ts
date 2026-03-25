@@ -64,23 +64,54 @@ describe('fetchUsage', () => {
   });
 
   it('wraps low-level fetch failures as network transport errors', async () => {
-    global.fetch = vi.fn().mockRejectedValue(new TypeError('fetch failed')) as typeof fetch;
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    global.fetch = fetchMock as typeof fetch;
 
     await expect(fetchUsage('token', 'account-id')).rejects.toBeInstanceOf(QuotaTransportError);
     await expect(fetchUsage('token', 'account-id')).rejects.toMatchObject<Partial<QuotaTransportError>>({
       kind: 'network',
       message: expect.stringContaining('could not reach chatgpt.com'),
     });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it('wraps timeout failures with a timeout-specific message', async () => {
     const timeoutError = new Error('The operation timed out');
     timeoutError.name = 'TimeoutError';
-    global.fetch = vi.fn().mockRejectedValue(timeoutError) as typeof fetch;
+    const fetchMock = vi.fn().mockRejectedValue(timeoutError);
+    global.fetch = fetchMock as typeof fetch;
 
     await expect(fetchUsage('token', 'account-id')).rejects.toMatchObject<Partial<QuotaTransportError>>({
       kind: 'timeout',
       message: 'Quota request timed out after 30 seconds. Check your connection and try again.',
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transient transport failure once before succeeding', async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          plan_type: 'team',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              limit_window_seconds: 18_000,
+              used_percent: 12,
+              reset_at: 1_900_000_000,
+            },
+          },
+        }),
+      });
+    global.fetch = fetchMock as typeof fetch;
+
+    const usage = await fetchUsage('token', 'account-id');
+
+    expect(usage.planType).toBe('team');
+    expect(usage.windows).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

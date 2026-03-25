@@ -17,6 +17,10 @@ type ActionItem = {
   run: () => Promise<void>;
 };
 
+type TaskOptions = {
+  showErrorDialog?: boolean;
+};
+
 export class QuotaManagerApp {
   private readonly screen: any;
   private readonly headerBox: any;
@@ -781,7 +785,7 @@ export class QuotaManagerApp {
       if (notify) {
         this.setStatus(`Refreshed usage for ${account.label}.`);
       }
-    });
+    }, { showErrorDialog: false });
   }
 
   private async refreshAllUsage(): Promise<void> {
@@ -847,9 +851,9 @@ export class QuotaManagerApp {
     });
   }
 
-  private async runTask(label: string, task: () => Promise<void>): Promise<void> {
+  private async runTask(label: string, task: () => Promise<void>, options: TaskOptions = {}): Promise<boolean> {
     if (this.busy) {
-      return;
+      return false;
     }
 
     this.busy = true;
@@ -859,11 +863,15 @@ export class QuotaManagerApp {
 
     try {
       await task();
+      return true;
     } catch (error) {
       const message = userFacingError(error);
       logError('ui.task', 'Task failed.', { label, error: formatErrorForLog(error) });
       this.setStatus(message);
-      this.showMessage(message, 'Error');
+      if (options.showErrorDialog !== false) {
+        this.showMessage(message, 'Error');
+      }
+      return false;
     } finally {
       this.busy = false;
       this.busyBox.hide();

@@ -1,9 +1,23 @@
 import type { QuotaWindow, UsageData } from './models.js';
-import { formatErrorForLog, logError } from './log.js';
+import { formatErrorForLog, logError, logWarn } from './log.js';
 import { clampPercent, truncate } from './utils.js';
 
 const DEFAULT_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const QUOTA_TIMEOUT_MS = 30_000;
+const QUOTA_RETRY_DELAY_MS = 250;
+const RETRYABLE_TRANSPORT_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ETIMEDOUT',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'EAI_AGAIN',
+]);
 
 interface UsageApiResponse {
   plan_type?: string;
@@ -42,22 +56,7 @@ export class QuotaTransportError extends Error {
 }
 
 export async function fetchUsage(accessToken: string, accountId: string): Promise<UsageData> {
-  let response: Response;
-
-  try {
-    response = await fetch(process.env.CQ_USAGE_URL?.trim() || DEFAULT_USAGE_URL, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-        'User-Agent': 'codex-quota-manager',
-        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
-      },
-      signal: createTimeoutSignal(QUOTA_TIMEOUT_MS),
-    });
-  } catch (error) {
-    throw mapTransportError(error);
-  }
+  const response = await fetchUsageResponse(accessToken, accountId);
 
   if (!response.ok) {
     const body = truncate((await response.text()).trim(), 500);
@@ -92,6 +91,30 @@ export async function fetchUsage(accessToken: string, accountId: string): Promis
   };
 }
 
+async function fetchUsageResponse(accessToken: string, accountId: string): Promise<Response> {
+  const request = buildRequest(accessToken, accountId);
+
+  try {
+    return await fetch(request.url, request.init);
+  } catch (error) {
+    if (shouldRetryTransportError(error)) {
+      logWarn('quota.fetch', 'Quota request hit a transient transport failure. Retrying once.', {
+        accountId,
+        error: formatErrorForLog(error),
+      });
+      await wait(QUOTA_RETRY_DELAY_MS);
+
+      try {
+        return await fetch(request.url, buildRequest(accessToken, accountId).init);
+      } catch (retryError) {
+        throw mapTransportError(retryError);
+      }
+    }
+
+    throw mapTransportError(error);
+  }
+}
+
 export function isUnauthorizedQuotaError(error: unknown): boolean {
   return error instanceof QuotaApiError && (error.statusCode === 401 || error.statusCode === 403);
 }
@@ -104,6 +127,22 @@ function createTimeoutSignal(timeoutMs: number): AbortSignal {
   const controller = new AbortController();
   setTimeout(() => controller.abort(new Error(`Timed out after ${timeoutMs} ms`)), timeoutMs);
   return controller.signal;
+}
+
+function buildRequest(accessToken: string, accountId: string): { url: string; init: RequestInit } {
+  return {
+    url: process.env.CQ_USAGE_URL?.trim() || DEFAULT_USAGE_URL,
+    init: {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'User-Agent': 'codex-quota-manager',
+        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
+      },
+      signal: createTimeoutSignal(QUOTA_TIMEOUT_MS),
+    },
+  };
 }
 
 function mapTransportError(error: unknown): QuotaTransportError {
@@ -124,6 +163,37 @@ function mapTransportError(error: unknown): QuotaTransportError {
     'network',
     error,
   );
+}
+
+function shouldRetryTransportError(error: unknown): boolean {
+  if (isTimeoutError(error)) {
+    return false;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const cause = extractErrorCause(error);
+  const causeCode = typeof cause?.code === 'string' ? cause.code : '';
+  if (causeCode && RETRYABLE_TRANSPORT_CODES.has(causeCode)) {
+    return true;
+  }
+
+  return error.name === 'TypeError' && error.message.trim() === 'fetch failed';
+}
+
+function extractErrorCause(error: Error): { code?: unknown; message?: unknown } | undefined {
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (!cause || typeof cause !== 'object') {
+    return undefined;
+  }
+
+  return cause as { code?: unknown; message?: unknown };
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function isTimeoutError(error: unknown): boolean {
