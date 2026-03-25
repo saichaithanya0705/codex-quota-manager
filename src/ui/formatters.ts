@@ -2,17 +2,19 @@ import type { Account, QuotaWindow } from '../lib/models.js';
 import { sourceLabel } from '../lib/models.js';
 import { shortAccountId, truncate } from '../lib/utils.js';
 
+export type AccountUiState = 'loaded' | 'error' | 'not-fetched';
+
 export function formatAccountRow(account: Account, width: number): string {
   const targets = account.activeTargets.length > 0 ? `[${account.activeTargets.join(',')}]` : '[stored]';
-  const plan = account.usage?.planType ? account.usage.planType.toUpperCase() : 'NO DATA';
-  const usage = account.usage
-    ? account.usage.windows.map((window) => `${shortWindowLabel(window)}:${Math.round(window.usedPercent)}%`).join(' ')
-    : account.lastError
-      ? 'ERROR'
-      : 'idle';
+  const state = getAccountUiState(account);
   const label = truncate(account.label || account.email || shortAccountId(account.accountId), Math.max(16, width - 24));
 
-  return `${label} ${targets} ${plan} ${usage}`.trim();
+  if (state === 'loaded' && account.usage) {
+    const usage = account.usage.windows.map((window) => `${shortWindowLabel(window)}:${Math.round(window.usedPercent)}%`).join(' ');
+    return `${label} ${targets} ${account.usage.planType.toUpperCase()} ${usage}`.trim();
+  }
+
+  return `${label} ${targets} ${state === 'error' ? 'ERROR' : 'NOT FETCHED'}`.trim();
 }
 
 export function formatAccountDetails(account: Account): string {
@@ -40,8 +42,10 @@ export function formatAccountDetails(account: Account): string {
       lines.push(`  Remaining: ${Math.round(window.leftPercent)}%`);
       lines.push(`  Resets: ${formatReset(window)}`);
     }
+  } else if (account.lastError) {
+    lines.push('Unable to load quota. Press r to retry.');
   } else {
-    lines.push('No usage loaded yet. Press r for the selected account or R for all accounts.');
+    lines.push('No usage loaded yet. Press r to fetch quota.');
   }
 
   if (account.lastError) {
@@ -55,22 +59,41 @@ export function formatAccountDetails(account: Account): string {
 
 export function helpText(): string {
   return [
-    'Keys',
+    'Help & Shortcuts',
     '',
+    'Navigation',
     'Up/Down or j/k  Move between accounts',
     'Enter           Open action menu',
+    '',
+    'Quota',
     'r               Refresh usage for selected account',
     'R               Refresh usage for all accounts',
     't               Refresh selected account token',
+    '',
+    'Accounts',
     'a               Apply selected account to Codex',
     'o               Apply selected account to OpenCode',
     'b               Apply selected account to both',
     'n               Add account with browser login',
     'x               Delete managed copy of selected account',
-    '?               Toggle help',
+    '',
+    'Support',
+    'h / ?           Toggle help and shortcuts',
     'Esc             Close the current dialog or quit',
     'q / Ctrl+C      Quit',
   ].join('\n');
+}
+
+export function getAccountUiState(account: Account): AccountUiState {
+  if (account.usage) {
+    return 'loaded';
+  }
+
+  if (account.lastError) {
+    return 'error';
+  }
+
+  return 'not-fetched';
 }
 
 function formatExpiresAt(expiresAt?: Date): string {

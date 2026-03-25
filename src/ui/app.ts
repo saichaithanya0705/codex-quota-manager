@@ -60,21 +60,21 @@ export class QuotaManagerApp {
       top: 3,
       left: 0,
       width: '100%',
-      height: 3,
-      border: 'line',
-      label: ' Status ',
-      content: 'Loading accounts...',
+      height: 1,
+      tags: false,
+      content: 'Status: Loading accounts...',
       style: {
-        border: { fg: 'blue' },
+        fg: 'cyan',
+        bold: true,
       },
     });
 
     this.listBox = blessed.list({
       parent: this.screen,
-      top: 6,
+      top: 4,
       left: 0,
       width: '42%',
-      height: '100%-8',
+      height: '100%-5',
       border: 'line',
       label: ' Accounts ',
       keys: true,
@@ -95,10 +95,10 @@ export class QuotaManagerApp {
 
     this.detailsBox = blessed.box({
       parent: this.screen,
-      top: 6,
+      top: 4,
       left: '42%',
       width: '58%',
-      height: '100%-8',
+      height: '100%-5',
       border: 'line',
       label: ' Details ',
       tags: false,
@@ -121,12 +121,11 @@ export class QuotaManagerApp {
       bottom: 0,
       left: 0,
       width: '100%',
-      height: 2,
-      border: 'line',
-      label: ' Shortcuts ',
-      content: 'Enter actions | r refresh | R all | t token | a codex | o opencode | b both | n add | x delete | ? help | q quit',
+      height: 1,
+      tags: false,
+      content: 'Press h for help | Enter for actions | q to quit',
       style: {
-        border: { fg: 'yellow' },
+        fg: 'yellow',
       },
     });
 
@@ -168,7 +167,7 @@ export class QuotaManagerApp {
       width: '70%',
       height: '70%',
       border: 'line',
-      label: ' Help ',
+      label: ' Shortcuts ',
       hidden: true,
       scrollable: true,
       alwaysScroll: true,
@@ -264,8 +263,12 @@ export class QuotaManagerApp {
       this.exit();
     });
 
-    this.screen.key(['?'], () => {
+    this.screen.key(['h', '?'], () => {
+      if (this.busy) {
+        return;
+      }
       if (this.helpBox.hidden) {
+        this.hideOverlay();
         this.showHelp();
       } else {
         this.hideOverlay();
@@ -436,6 +439,7 @@ export class QuotaManagerApp {
   }
 
   private showHelp(): void {
+    this.helpBox.setContent(helpText());
     this.helpBox.show();
     this.helpBox.focus();
     this.screen.render();
@@ -629,7 +633,7 @@ export class QuotaManagerApp {
   }
 
   private setStatus(message: string): void {
-    this.statusBox.setContent(truncate(message, 400));
+    this.statusBox.setContent(`Status: ${truncate(message, 220)}`);
     this.screen.render();
   }
 

@@ -2,6 +2,7 @@ import type { QuotaWindow, UsageData } from './models.js';
 import { clampPercent, truncate } from './utils.js';
 
 const DEFAULT_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+const QUOTA_TIMEOUT_MS = 30_000;
 
 interface UsageApiResponse {
   plan_type?: string;
@@ -29,16 +30,33 @@ export class QuotaApiError extends Error {
   }
 }
 
+export class QuotaTransportError extends Error {
+  constructor(
+    message: string,
+    readonly kind: 'network' | 'timeout',
+    readonly cause?: unknown,
+  ) {
+    super(message);
+  }
+}
+
 export async function fetchUsage(accessToken: string, accountId: string): Promise<UsageData> {
-  const response = await fetch(process.env.CQ_USAGE_URL?.trim() || DEFAULT_USAGE_URL, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      'User-Agent': 'codex-quota-manager',
-      ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
-    },
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(process.env.CQ_USAGE_URL?.trim() || DEFAULT_USAGE_URL, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'User-Agent': 'codex-quota-manager',
+        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
+      },
+      signal: createTimeoutSignal(QUOTA_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw mapTransportError(error);
+  }
 
   if (!response.ok) {
     const body = truncate((await response.text()).trim(), 500);
@@ -74,6 +92,51 @@ export async function fetchUsage(accessToken: string, accountId: string): Promis
 
 export function isUnauthorizedQuotaError(error: unknown): boolean {
   return error instanceof QuotaApiError && (error.statusCode === 401 || error.statusCode === 403);
+}
+
+function createTimeoutSignal(timeoutMs: number): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs);
+  }
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error(`Timed out after ${timeoutMs} ms`)), timeoutMs);
+  return controller.signal;
+}
+
+function mapTransportError(error: unknown): QuotaTransportError {
+  if (isTimeoutError(error)) {
+    return new QuotaTransportError(
+      'Quota request timed out after 30 seconds. Check your connection and try again.',
+      'timeout',
+      error,
+    );
+  }
+
+  const details = extractErrorDetails(error);
+  const suffix = details ? ` Details: ${details}` : '';
+  return new QuotaTransportError(
+    `Quota request could not reach chatgpt.com. Check your connection, proxy, firewall, or TLS settings and try again.${suffix}`,
+    'network',
+    error,
+  );
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
+}
+
+function extractErrorDetails(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return '';
+  }
+
+  const message = error.message.trim();
+  if (!message || message === 'fetch failed') {
+    return '';
+  }
+
+  return truncate(message, 120);
 }
 
 function mapWindow(window: UsageWindowPayload, fallback: string): QuotaWindow {
