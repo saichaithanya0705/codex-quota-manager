@@ -1,6 +1,6 @@
 {
   "name": "codex-quota-manager",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Cross-platform Node TUI for managing Codex accounts and quota usage.",
   "license": "MIT",
   "homepage": "https://github.com/saichaithanya0705/codex-quota-manager#readme",

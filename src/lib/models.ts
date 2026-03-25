@@ -39,6 +39,7 @@ export interface Account {
   writable: boolean;
   sources: Source[];
   activeTargets: Target[];
+  targetPaths?: Partial<Record<Target, string>>;
   usage?: UsageData;
   lastError?: string;
 }

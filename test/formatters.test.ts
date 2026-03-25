@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Account } from '../src/lib/models.js';
-import { formatAccountDetails, formatAccountRow, getAccountUiState, helpText } from '../src/ui/formatters.js';
+import {
+  formatAccountRow,
+  formatAccountWorkspaceDetails,
+  formatAccountWorkspaceSummary,
+  getAccountUiState,
+  helpText,
+} from '../src/ui/formatters.js';
 
 function createAccount(overrides: Partial<Account> = {}): Account {
   return {
@@ -38,17 +44,30 @@ describe('formatAccountRow', () => {
   });
 });
 
-describe('formatAccountDetails', () => {
+describe('formatAccountWorkspaceDetails', () => {
   it('shows actionable copy for quota errors', () => {
     const account = createAccount({ lastError: 'Quota request timed out after 30 seconds. Check your connection and try again.' });
 
-    expect(formatAccountDetails(account)).toContain('Unable to load quota. Press r to retry.');
-    expect(formatAccountDetails(account)).toContain('Last Error');
+    expect(formatAccountWorkspaceDetails(account)).toContain('Unable to load quota. Press r to retry or choose Refresh usage.');
+    expect(formatAccountWorkspaceDetails(account)).toContain('Last Error');
   });
 });
 
 describe('helpText', () => {
   it('documents h as the primary help shortcut', () => {
     expect(helpText()).toContain('h / ?           Toggle help and shortcuts');
+  });
+
+  it('documents Enter as opening the selected account workspace', () => {
+    expect(helpText()).toContain('Enter           Open the selected account workspace');
+  });
+});
+
+describe('formatAccountWorkspaceSummary', () => {
+  it('shows whether an account is manager-owned', () => {
+    const account = createAccount({ sources: ['managed', 'codex'], activeTargets: ['codex'] });
+
+    expect(formatAccountWorkspaceSummary(account)).toContain('Stored in manager: yes');
+    expect(formatAccountWorkspaceSummary(account)).toContain('Active Targets: codex');
   });
 });

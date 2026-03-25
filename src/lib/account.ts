@@ -14,6 +14,7 @@ export function cloneAccount(account: Account): Account {
     expiresAt: account.expiresAt ? new Date(account.expiresAt) : undefined,
     sources: [...account.sources],
     activeTargets: [...account.activeTargets],
+    targetPaths: account.targetPaths ? { ...account.targetPaths } : undefined,
     usage: account.usage
       ? {
           ...account.usage,
@@ -44,17 +45,34 @@ export function applyClaimsToAccount(account: Account, claims: TokenClaims): Acc
 
 export function identityKeys(account: Pick<Account, 'accountId' | 'email'>): string[] {
   const keys: string[] = [];
+  const accountId = canonicalAccountId(account.accountId);
 
-  if (account.accountId.trim()) {
-    keys.push(`account:${account.accountId.trim()}`);
-  }
-
-  const email = normalizeEmail(account.email);
-  if (email) {
-    keys.push(`email:${email}`);
+  if (accountId) {
+    keys.push(`account:${accountId}`);
+  } else {
+    const email = normalizeEmail(account.email);
+    if (email) {
+      keys.push(`email:${email}`);
+    }
   }
 
   return keys;
+}
+
+export function accountsShareIdentity(
+  left: Pick<Account, 'accountId' | 'email'>,
+  right: Pick<Account, 'accountId' | 'email'>,
+): boolean {
+  const leftId = canonicalAccountId(left.accountId);
+  const rightId = canonicalAccountId(right.accountId);
+
+  if (leftId || rightId) {
+    return Boolean(leftId && rightId && leftId === rightId);
+  }
+
+  const leftEmail = normalizeEmail(left.email);
+  const rightEmail = normalizeEmail(right.email);
+  return Boolean(leftEmail && rightEmail && leftEmail === rightEmail);
 }
 
 export function activeIdentityKeys(
@@ -71,7 +89,7 @@ export function activeIdentityKeys(
     keys.push(refreshKey);
   }
 
-  return keys;
+  return dedupeStrings(keys);
 }
 
 export function finalizeAccount(account: Account): Account {
@@ -97,6 +115,11 @@ export function finalizeAccount(account: Account): Account {
 
   account.sources = dedupeStrings(account.sources.length ? account.sources : [account.source]);
   account.activeTargets = dedupeStrings(account.activeTargets);
+  if (account.targetPaths) {
+    account.targetPaths = Object.fromEntries(
+      Object.entries(account.targetPaths).filter((entry): entry is [Target, string] => Boolean(entry[1]?.trim())),
+    ) as Partial<Record<Target, string>>;
+  }
 
   return account;
 }
@@ -108,6 +131,10 @@ export function mergeAccounts(current: Account, incoming: Account): Account {
   merged.sources = dedupeStrings([...merged.sources, ...incoming.sources, incoming.source]);
   merged.activeTargets = dedupeStrings([...merged.activeTargets, ...incoming.activeTargets]);
   merged.accountId = canonicalAccountId(merged.accountId, incoming.accountId);
+  merged.targetPaths = {
+    ...(incoming.targetPaths ?? {}),
+    ...(merged.targetPaths ?? {}),
+  };
 
   if (!merged.email && incoming.email) {
     merged.email = incoming.email;

@@ -1,4 +1,5 @@
 import type { QuotaWindow, UsageData } from './models.js';
+import { formatErrorForLog, logError } from './log.js';
 import { clampPercent, truncate } from './utils.js';
 
 const DEFAULT_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
@@ -60,6 +61,7 @@ export async function fetchUsage(accessToken: string, accountId: string): Promis
 
   if (!response.ok) {
     const body = truncate((await response.text()).trim(), 500);
+    logError('quota.fetch', 'Quota API returned a non-success status.', { accountId, status: response.status, body });
     throw new QuotaApiError(
       body ? `Quota request failed with status ${response.status}: ${body}` : `Quota request failed with status ${response.status}`,
       response.status,
@@ -106,6 +108,7 @@ function createTimeoutSignal(timeoutMs: number): AbortSignal {
 
 function mapTransportError(error: unknown): QuotaTransportError {
   if (isTimeoutError(error)) {
+    logError('quota.fetch', 'Quota request timed out.', formatErrorForLog(error));
     return new QuotaTransportError(
       'Quota request timed out after 30 seconds. Check your connection and try again.',
       'timeout',
@@ -115,6 +118,7 @@ function mapTransportError(error: unknown): QuotaTransportError {
 
   const details = extractErrorDetails(error);
   const suffix = details ? ` Details: ${details}` : '';
+  logError('quota.fetch', 'Quota request could not reach chatgpt.com.', formatErrorForLog(error));
   return new QuotaTransportError(
     `Quota request could not reach chatgpt.com. Check your connection, proxy, firewall, or TLS settings and try again.${suffix}`,
     'network',

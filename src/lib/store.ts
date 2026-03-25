@@ -1,11 +1,12 @@
 import fs from 'node:fs/promises';
 import type { Account, Target } from './models.js';
-import { activeIdentityKeys, applyClaimsToAccount, finalizeAccount, identityKeys, mergeAccounts } from './account.js';
+import { accountsShareIdentity, activeIdentityKeys, applyClaimsToAccount, finalizeAccount, identityKeys, mergeAccounts } from './account.js';
 import { refreshAccessToken } from './auth.js';
 import { readJsonFile, writeJsonAtomic } from './json.js';
 import { parseAccessToken } from './jwt.js';
+import { logInfo } from './log.js';
 import { getCodexAuthPath, getManagedAccountsPath, getOpenCodeAuthPaths } from './paths.js';
-import { asInt, asRecord, asString, canonicalAccountId, dedupeStrings, normalizeEmail } from './utils.js';
+import { asInt, asRecord, asString, canonicalAccountId, dedupeStrings, hashToken, normalizeEmail } from './utils.js';
 
 interface ManagedStore {
   accounts?: ManagedAccountRecord[];
@@ -20,6 +21,12 @@ interface ManagedAccountRecord {
   refresh_token?: string;
   client_id?: string;
   expires_at_ms?: number;
+  target_paths?: Partial<Record<Target, string>>;
+}
+
+export interface UpsertManagedAccountResult {
+  action: 'created' | 'updated';
+  matchedBy: 'accountId' | 'email' | 'none';
 }
 
 export async function loadAccounts(): Promise<Account[]> {
@@ -27,16 +34,12 @@ export async function loadAccounts(): Promise<Account[]> {
   const openCodeAccounts = await loadOpenCodeAccounts();
   const codexAccount = await loadCodexAccount();
   const discovered = [...openCodeAccounts, ...(codexAccount ? [codexAccount] : [])];
-
-  await syncDiscoveredAccounts(discovered);
-
-  const canonicalManaged = await loadManagedAccounts();
-  const merged = dedupeAccounts([...canonicalManaged, ...discovered]);
+  const merged = dedupeAccounts([...managedAccounts, ...discovered]);
   sortAccounts(merged);
   return merged;
 }
 
-export async function upsertManagedAccount(account: Account): Promise<void> {
+export async function upsertManagedAccount(account: Account): Promise<UpsertManagedAccountResult> {
   const normalized = finalizeAccount(applyClaimsToAccount(stripUsage(account), parseAccessToken(account.accessToken)));
   if (!normalized.accountId.trim()) {
     throw new Error('Cannot save an account without an account ID.');
@@ -46,9 +49,12 @@ export async function upsertManagedAccount(account: Account): Promise<void> {
   const incoming = accountToManagedRecord(normalized);
 
   let updated = false;
+  let matchedBy: UpsertManagedAccountResult['matchedBy'] = 'none';
   store.accounts = (store.accounts ?? []).map((record) => {
-    if (recordsMatch(record, incoming)) {
+    const matchType = recordMatchType(record, incoming);
+    if (matchType !== 'none') {
       updated = true;
+      matchedBy = matchType;
       return mergeManagedRecords(record, incoming);
     }
     return record;
@@ -59,6 +65,18 @@ export async function upsertManagedAccount(account: Account): Promise<void> {
   }
 
   await saveManagedStore(store);
+  logInfo('store.upsert', 'Managed account saved.', {
+    accountId: normalized.accountId,
+    email: normalized.email || undefined,
+    totalAccounts: store.accounts.length,
+    action: updated ? 'updated' : 'created',
+    matchedBy,
+  });
+
+  return {
+    action: updated ? 'updated' : 'created',
+    matchedBy,
+  };
 }
 
 export async function deleteManagedAccount(account: Account): Promise<void> {
@@ -69,7 +87,10 @@ export async function deleteManagedAccount(account: Account): Promise<void> {
   store.accounts = (store.accounts ?? []).filter((record) => {
     const recordEmail = normalizeEmail(record.email || '');
     const recordAccountId = canonicalAccountId(record.account_id);
-    return !(targetAccountId && recordAccountId === targetAccountId) && !(targetEmail && recordEmail === targetEmail);
+    if (targetAccountId) {
+      return recordAccountId !== targetAccountId;
+    }
+    return !(targetEmail && recordEmail === targetEmail);
   });
 
   await saveManagedStore(store);
@@ -120,6 +141,7 @@ async function loadManagedAccounts(): Promise<Account[]> {
       writable: true,
       sources: ['managed'],
       activeTargets: [],
+      targetPaths: normalizeTargetPaths(asRecord(record.target_paths)),
     };
 
     accounts.push(finalizeAccount(applyClaimsToAccount(account, parseAccessToken(account.accessToken))));
@@ -169,6 +191,7 @@ async function loadOpenCodeAccounts(): Promise<Account[]> {
       writable: filePath === writablePath,
       sources: ['opencode'],
       activeTargets: ['opencode'],
+      targetPaths: { opencode: filePath },
     };
 
     accounts.push(finalizeAccount(applyClaimsToAccount(account, parseAccessToken(account.accessToken))));
@@ -201,18 +224,10 @@ async function loadCodexAccount(): Promise<Account | undefined> {
     writable: true,
     sources: ['codex'],
     activeTargets: ['codex'],
+    targetPaths: { codex: filePath },
   };
 
   return finalizeAccount(applyClaimsToAccount(account, parseAccessToken(account.accessToken)));
-}
-
-async function syncDiscoveredAccounts(accounts: Account[]): Promise<void> {
-  for (const account of accounts) {
-    if (!account.accessToken.trim() || !account.accountId.trim()) {
-      continue;
-    }
-    await upsertManagedAccount(account);
-  }
 }
 
 function dedupeAccounts(accounts: Account[]): Account[] {
@@ -261,7 +276,7 @@ function buildActiveTargetIndex(accounts: Account[]): Map<string, Set<Target>> {
 
   for (const account of accounts) {
     for (const target of account.activeTargets) {
-      for (const key of activeIdentityKeys(account)) {
+      for (const key of targetIdentityKeys(account)) {
         const bucket = index.get(key) ?? new Set<Target>();
         bucket.add(target);
         index.set(key, bucket);
@@ -275,17 +290,43 @@ function buildActiveTargetIndex(accounts: Account[]): Map<string, Set<Target>> {
 function findMergedMatch(index: Map<string, Account>, account: Account): Account | undefined {
   for (const key of activeIdentityKeys(account)) {
     const found = index.get(key);
-    if (found) {
+    if (found && accountsShareIdentity(found, account)) {
       return found;
     }
   }
   for (const key of identityKeys(account)) {
     const found = index.get(key);
-    if (found) {
+    if (found && accountsShareIdentity(found, account)) {
       return found;
     }
   }
   return undefined;
+}
+
+function targetIdentityKeys(account: Pick<Account, 'accountId' | 'email' | 'accessToken' | 'refreshToken'>): string[] {
+  const keys: string[] = [];
+  const accountId = canonicalAccountId(account.accountId);
+
+  if (accountId) {
+    keys.push(`account:${accountId}`);
+  } else {
+    const email = normalizeEmail(account.email);
+    if (email) {
+      keys.push(`email:${email}`);
+    }
+  }
+
+  const accessKey = hashToken('access', account.accessToken);
+  if (accessKey) {
+    keys.push(accessKey);
+  }
+
+  const refreshKey = hashToken('refresh', account.refreshToken);
+  if (refreshKey) {
+    keys.push(refreshKey);
+  }
+
+  return dedupeStrings(keys);
 }
 
 async function applyAccountToCodex(account: Account): Promise<string> {
@@ -299,7 +340,7 @@ async function applyAccountToCodex(account: Account): Promise<string> {
     );
   }
 
-  const filePath = getCodexAuthPath();
+  const filePath = account.targetPaths?.codex?.trim() || getCodexAuthPath();
   const root = (await readJsonFile<Record<string, unknown>>(filePath)) ?? {};
   const tokens = asRecord(root.tokens) ?? {};
 
@@ -316,6 +357,10 @@ async function applyAccountToCodex(account: Account): Promise<string> {
   root.last_refresh = new Date().toISOString();
 
   await writeJsonAtomic(filePath, root);
+  account.targetPaths = {
+    ...(account.targetPaths ?? {}),
+    codex: filePath,
+  };
   return filePath;
 }
 
@@ -332,34 +377,37 @@ async function applyAccountToOpenCode(account: Account): Promise<string> {
     }
   }
 
-  const targetPaths = existingPaths.length > 0 ? existingPaths : candidates.slice(0, 1);
-  if (targetPaths.length === 0) {
+  const preferredPath = account.targetPaths?.opencode?.trim();
+  const targetPath = preferredPath || existingPaths[0] || candidates[0] || '';
+  if (!targetPath) {
     throw new Error('Could not determine an OpenCode auth path.');
   }
 
-  for (const filePath of targetPaths) {
-    const root = (await readJsonFile<Record<string, unknown>>(filePath)) ?? {};
-    const openAi = asRecord(root.openai) ?? {};
+  const root = (await readJsonFile<Record<string, unknown>>(targetPath)) ?? {};
+  const openAi = asRecord(root.openai) ?? {};
 
-    openAi.access = account.accessToken;
-    if (account.refreshToken) {
-      openAi.refresh = account.refreshToken;
-    }
-    if (account.accountId) {
-      openAi.accountId = account.accountId;
-    }
-    if (account.email) {
-      openAi.email = account.email;
-    }
-    if (account.expiresAt) {
-      openAi.expires = account.expiresAt.getTime();
-    }
-
-    root.openai = openAi;
-    await writeJsonAtomic(filePath, root);
+  openAi.access = account.accessToken;
+  if (account.refreshToken) {
+    openAi.refresh = account.refreshToken;
+  }
+  if (account.accountId) {
+    openAi.accountId = account.accountId;
+  }
+  if (account.email) {
+    openAi.email = account.email;
+  }
+  if (account.expiresAt) {
+    openAi.expires = account.expiresAt.getTime();
   }
 
-  return targetPaths[0]!;
+  root.openai = openAi;
+  await writeJsonAtomic(targetPath, root);
+  account.targetPaths = {
+    ...(account.targetPaths ?? {}),
+    opencode: targetPath,
+  };
+
+  return targetPath;
 }
 
 async function readManagedStore(): Promise<Required<ManagedStore>> {
@@ -383,6 +431,7 @@ function accountToManagedRecord(account: Account): ManagedAccountRecord {
     refresh_token: account.refreshToken || undefined,
     client_id: account.clientId || undefined,
     expires_at_ms: account.expiresAt?.getTime(),
+    target_paths: account.targetPaths,
   };
 }
 
@@ -401,17 +450,25 @@ function mergeManagedRecords(existing: ManagedAccountRecord, incoming: ManagedAc
     refresh_token: shouldReplaceToken ? (incoming.refresh_token || existing.refresh_token) : (existing.refresh_token || incoming.refresh_token),
     client_id: shouldReplaceToken ? (incoming.client_id || existing.client_id) : (existing.client_id || incoming.client_id),
     expires_at_ms: shouldReplaceToken ? (incoming.expires_at_ms || existing.expires_at_ms) : (existing.expires_at_ms || incoming.expires_at_ms),
+    target_paths: {
+      ...(existing.target_paths ?? {}),
+      ...(incoming.target_paths ?? {}),
+    },
   };
 }
 
-function recordsMatch(left: ManagedAccountRecord, right: ManagedAccountRecord): boolean {
+function recordMatchType(left: ManagedAccountRecord, right: ManagedAccountRecord): UpsertManagedAccountResult['matchedBy'] {
   const leftId = canonicalAccountId(left.account_id);
   const rightId = canonicalAccountId(right.account_id);
   if (leftId && rightId && leftId === rightId) {
-    return true;
+    return 'accountId';
   }
 
-  return normalizeEmail(left.email || '') !== '' && normalizeEmail(left.email || '') === normalizeEmail(right.email || '');
+  if (!leftId && !rightId && normalizeEmail(left.email || '') !== '' && normalizeEmail(left.email || '') === normalizeEmail(right.email || '')) {
+    return 'email';
+  }
+
+  return 'none';
 }
 
 function stripUsage(account: Account): Account {
@@ -430,4 +487,32 @@ function sortAccounts(accounts: Account[]): void {
     const rightLabel = `${right.label || right.email || right.accountId}`.toLowerCase();
     return leftLabel.localeCompare(rightLabel);
   });
+}
+
+export function describeAccountForLogs(account: Account): Record<string, string | undefined> {
+  return {
+    accountId: account.accountId || undefined,
+    email: account.email || undefined,
+    label: account.label || undefined,
+    sources: account.sources.join(',') || undefined,
+  };
+}
+
+function normalizeTargetPaths(value: Record<string, unknown> | undefined): Partial<Record<Target, string>> | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized: Partial<Record<Target, string>> = {};
+  const codexPath = asString(value.codex).trim();
+  const openCodePath = asString(value.opencode).trim();
+
+  if (codexPath) {
+    normalized.codex = codexPath;
+  }
+  if (openCodePath) {
+    normalized.opencode = openCodePath;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

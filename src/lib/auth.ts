@@ -5,13 +5,13 @@ import { URLSearchParams } from 'node:url';
 import type { Account } from './models.js';
 import { applyClaimsToAccount, finalizeAccount } from './account.js';
 import { parseAccessToken } from './jwt.js';
+import { formatErrorForLog, logError, logInfo, logWarn } from './log.js';
 import { asString, truncate } from './utils.js';
 
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const REDIRECT_URI = 'http://localhost:1455/auth/callback';
-const CALLBACK_HOST = '127.0.0.1';
 const CALLBACK_PORT = 1455;
 const OAUTH_SCOPE = 'openid profile email offline_access';
 
@@ -57,6 +57,7 @@ export async function refreshAccessToken(account: Account): Promise<Account> {
   });
 
   if (!response.ok) {
+    logError('auth.refresh', 'Token refresh failed.', { accountId: account.accountId, status: response.status });
     throw new Error(`Token refresh failed with status ${response.status}: ${truncate((await response.text()).trim(), 500)}`);
   }
 
@@ -76,7 +77,9 @@ export async function refreshAccessToken(account: Account): Promise<Account> {
     account.expiresAt = new Date(Date.now() + payload.expires_in * 1000);
   }
 
-  return applyClaimsToAccount(account, parseAccessToken(account.accessToken));
+  const refreshed = applyClaimsToAccount(account, parseAccessToken(account.accessToken));
+  logInfo('auth.refresh', 'Token refresh completed.', { accountId: refreshed.accountId, expiresAt: refreshed.expiresAt?.toISOString() });
+  return refreshed;
 }
 
 export function isExpired(account: Account): boolean {
@@ -98,6 +101,7 @@ export async function loginWithBrowser(
   onStatus?: (status: LoginStatus) => void,
   timeoutMs = 5 * 60 * 1000,
 ): Promise<Account> {
+  logInfo('auth.login', 'Starting browser login flow.', { redirectUri: REDIRECT_URI, callbackPort: CALLBACK_PORT });
   const verifier = randomBase64Url(32);
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   const state = randomBytes(16).toString('hex');
@@ -126,7 +130,9 @@ export async function loginWithBrowser(
     };
 
     const timeoutHandle = setTimeout(() => {
-      finish(new Error(`Authentication timed out. Open ${authUrl} to retry.`));
+      const error = new Error(`Authentication timed out. Open ${authUrl} to retry.`);
+      logError('auth.login', 'Browser login timed out.', { authUrl });
+      finish(error);
     }, timeoutMs);
 
     server.on('request', async (request: http.IncomingMessage, response: http.ServerResponse) => {
@@ -141,7 +147,23 @@ export async function loginWithBrowser(
         if (requestUrl.searchParams.get('state') !== state) {
           response.statusCode = 400;
           response.end('State mismatch');
+          logError('auth.login', 'OAuth state mismatch.', { receivedState: requestUrl.searchParams.get('state') });
           finish(new Error('OAuth state mismatch.'));
+          return;
+        }
+
+        const oauthError = requestUrl.searchParams.get('error');
+        if (oauthError) {
+          const description = requestUrl.searchParams.get('error_description') || 'OAuth provider returned an error.';
+          const message = `OAuth login failed: ${oauthError}${description ? ` - ${description}` : ''}`;
+          response.statusCode = 400;
+          response.setHeader('Content-Type', 'text/html; charset=utf-8');
+          response.end(`<h1>Authentication failed</h1><p>${escapeHtml(message)}</p>`);
+          logError('auth.login', 'OAuth provider returned an error callback.', {
+            error: oauthError,
+            description,
+          });
+          finish(new Error(message));
           return;
         }
 
@@ -149,27 +171,33 @@ export async function loginWithBrowser(
         if (!code) {
           response.statusCode = 400;
           response.end('Missing code');
+          logError('auth.login', 'OAuth callback missing authorization code.');
           finish(new Error('OAuth callback did not include an authorization code.'));
           return;
         }
 
+        const tokenResponse = await exchangeCodeForToken(code, verifier);
+        const builtAccount = await accountFromTokenResponse(tokenResponse);
         response.statusCode = 200;
         response.setHeader('Content-Type', 'text/html; charset=utf-8');
         response.end('Authentication successful. You can close this window.');
-
-        const tokenResponse = await exchangeCodeForToken(code, verifier);
-        const builtAccount = await accountFromTokenResponse(tokenResponse);
+        logInfo('auth.login', 'Browser login completed.', { accountId: builtAccount.accountId, email: builtAccount.email || undefined });
         finish(undefined, builtAccount);
       } catch (error) {
+        response.statusCode = 500;
+        response.setHeader('Content-Type', 'text/html; charset=utf-8');
+        response.end(`<h1>Authentication failed</h1><p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p>`);
+        logError('auth.login', 'OAuth callback handling failed.', formatErrorForLog(error));
         finish(error as Error);
       }
     });
 
-    server.listen(CALLBACK_PORT, CALLBACK_HOST, async () => {
+    server.listen(CALLBACK_PORT, async () => {
       try {
         await openExternal(authUrl);
       } catch {
         browserOpenFailed = true;
+        logWarn('auth.login', 'Browser did not open automatically.', { authUrl });
       }
 
       onStatus?.({
@@ -179,6 +207,14 @@ export async function loginWithBrowser(
     });
 
     server.on('error', (error: Error) => {
+      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+        const wrapped = new Error(`Login callback port ${CALLBACK_PORT} is already in use. Close other Codex Quota Manager login windows and try again.`);
+        logError('auth.login', 'Callback port already in use.', formatErrorForLog(error));
+        finish(wrapped);
+        return;
+      }
+
+      logError('auth.login', 'OAuth callback server failed.', formatErrorForLog(error));
       finish(error as Error);
     });
   });
@@ -190,6 +226,11 @@ async function accountFromTokenResponse(payload: TokenExchangeResponse): Promise
   const accessToken = payload.access_token?.trim() || '';
   const refreshToken = payload.refresh_token?.trim() || '';
   if (!accessToken || !refreshToken) {
+    logError('auth.login', 'Token exchange response did not include required tokens.', {
+      hasAccessToken: Boolean(accessToken),
+      hasRefreshToken: Boolean(refreshToken),
+      hasIdToken: Boolean(payload.id_token?.trim()),
+    });
     throw new Error('Token exchange response was missing required tokens.');
   }
 
@@ -212,10 +253,14 @@ async function accountFromTokenResponse(payload: TokenExchangeResponse): Promise
   };
 
   if (!account.email) {
-    const me = await fetchCurrentUser(accessToken);
-    account.email = me.email;
-    if (!account.label && me.name) {
-      account.label = me.name;
+    try {
+      const me = await fetchCurrentUser(accessToken);
+      account.email = me.email;
+      if (!account.label && me.name) {
+        account.label = me.name;
+      }
+    } catch (error) {
+      logWarn('auth.login', 'Profile lookup failed during browser login; continuing with token claims only.', formatErrorForLog(error));
     }
   }
 
@@ -224,6 +269,7 @@ async function accountFromTokenResponse(payload: TokenExchangeResponse): Promise
   }
 
   if (!account.accountId) {
+    logError('auth.login', 'Access token did not include account ID.');
     throw new Error('Failed to determine account ID from the access token.');
   }
 
@@ -249,9 +295,11 @@ async function exchangeCodeForToken(code: string, verifier: string): Promise<Tok
   });
 
   if (!response.ok) {
+    logError('auth.login', 'Token exchange failed.', { status: response.status });
     throw new Error(`Token exchange failed with status ${response.status}: ${truncate((await response.text()).trim(), 500)}`);
   }
 
+  logInfo('auth.login', 'Token exchange completed.');
   return (await response.json()) as TokenExchangeResponse;
 }
 
@@ -265,6 +313,7 @@ async function fetchCurrentUser(accessToken: string): Promise<{ email: string; n
   });
 
   if (!response.ok) {
+    logError('auth.login', 'Fetching current user profile failed.', { status: response.status });
     throw new Error(`Failed to fetch user profile: ${response.status} ${truncate((await response.text()).trim(), 300)}`);
   }
 
@@ -323,4 +372,13 @@ async function openExternal(url: string): Promise<void> {
     child.once('error', reject);
     child.once('spawn', () => resolve());
   });
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }

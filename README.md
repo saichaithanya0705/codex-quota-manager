@@ -12,7 +12,9 @@ This project is designed to work on Windows, macOS, and Linux. iOS is not a firs
 - Refresh expired access tokens with stored refresh tokens
 - Add accounts through browser OAuth
 - Apply an account to Codex, OpenCode, or both
-- Preserve discovered accounts in the app-managed store
+- Keep discovered external auth visible without silently copying it into the manager store
+- Show quota state directly in the main account list
+- Open an account workspace with `Enter` for deeper actions and details
 
 ## Quick Start
 
@@ -65,6 +67,18 @@ Run after global install:
 
 ```bash
 cqm
+```
+
+Update an existing global install:
+
+```bash
+npm install -g codex-quota-manager@latest
+```
+
+Run the latest version without installing:
+
+```bash
+npx --yes codex-quota-manager@latest
 ```
 
 ## Install From GitHub Packages
@@ -170,7 +184,7 @@ Recommended setup:
 ## Keybindings
 
 - `Up/Down` or `j/k`: move selection
-- `Enter`: open action menu
+- `Enter`: open account workspace
 - `r`: refresh selected account usage
 - `R`: refresh all account usage
 - `t`: refresh selected account token
@@ -179,7 +193,9 @@ Recommended setup:
 - `b`: apply selected account to both
 - `n`: add account through browser login
 - `x`: delete managed copy of selected account
-- `?`: toggle help
+- `h` / `?`: toggle help and shortcuts
+- `l`: open application logs
+- `Tab` / `Shift+Tab`: cycle focus inside the workspace
 - `Esc`: close dialog or quit
 - `q` / `Ctrl+C`: quit
 

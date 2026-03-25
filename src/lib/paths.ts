@@ -123,3 +123,7 @@ export function getConfigDir(runtime?: PathRuntime): string {
 export function getManagedAccountsPath(runtime?: PathRuntime): string {
   return getPathApi(runtime).join(getConfigDir(runtime), 'accounts.json');
 }
+
+export function getLogDir(runtime?: PathRuntime): string {
+  return getPathApi(runtime).join(getConfigDir(runtime), 'logs');
+}

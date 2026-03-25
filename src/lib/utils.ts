@@ -102,13 +102,16 @@ export function truncate(value: string, maxLength: number): string {
 }
 
 export function sameAccountIdentity(left: Account, right: Account): boolean {
-  if (left.accountId && right.accountId && left.accountId === right.accountId) {
-    return true;
+  const leftId = canonicalAccountId(left.accountId);
+  const rightId = canonicalAccountId(right.accountId);
+
+  if (leftId || rightId) {
+    return Boolean(leftId && rightId && leftId === rightId);
   }
 
-  if (left.email && right.email && normalizeEmail(left.email) === normalizeEmail(right.email)) {
-    return true;
-  }
-
-  return false;
+  return Boolean(
+    left.email &&
+    right.email &&
+    normalizeEmail(left.email) === normalizeEmail(right.email),
+  );
 }
