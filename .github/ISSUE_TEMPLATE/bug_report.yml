@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible defect in the manager
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Provide a minimal, reproducible report. Include platform and auth target details when relevant.
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, terminal, Node.js version, and package version
+      placeholder: Windows 11, PowerShell 7.6, Node 24, codex-quota-manager 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Affected target
+      options:
+        - Codex CLI
+        - Codex VS Code extension
+        - OpenCode
+        - TUI only
+        - Release or install flow
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the app
+        2. Select account X
+        3. Apply to Codex
+        4. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      render: shell

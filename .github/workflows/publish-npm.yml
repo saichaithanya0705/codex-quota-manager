@@ -35,16 +35,33 @@ jobs:
             exit 1
           fi
 
+      - name: Check whether version is already published
+        id: published
+        shell: bash
+        run: |
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Version ${PKG_NAME}@${PKG_VERSION} is already on npm. Skipping publish."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install dependencies
+        if: steps.published.outputs.already_published != 'true'
         run: npm ci
 
       - name: Build
+        if: steps.published.outputs.already_published != 'true'
         run: npm run build
 
       - name: Test
+        if: steps.published.outputs.already_published != 'true'
         run: npm test
 
       - name: Publish package
+        if: steps.published.outputs.already_published != 'true'
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

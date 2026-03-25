@@ -28,7 +28,7 @@
     "LICENSE"
   ],
   "bin": {
-    "cqm": "./dist/cli.js"
+    "cqm": "dist/cli.js"
   },
   "publishConfig": {
     "access": "public",

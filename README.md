@@ -20,6 +20,12 @@ This project is designed to work on Windows, macOS, and Linux. iOS is not a firs
 npm install
 ```
 
+Global install:
+
+```bash
+npm install -g codex-quota-manager
+```
+
 ## Run
 
 Development:
@@ -65,6 +71,12 @@ Recommended setup:
    - configure an npm granular token as the `NPM_TOKEN` repository secret, or
    - configure npm trusted publishing for `.github/workflows/publish-npm.yml` once the package exists.
 4. After trusted publishing is working, prefer it over long-lived tokens.
+
+## Community Files
+
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
+- [SECURITY.md](./SECURITY.md)
 
 ## Keybindings
 
