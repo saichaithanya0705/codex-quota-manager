@@ -1,0 +1,74 @@
+name: Publish to GitHub Packages
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js for GitHub Packages
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: "@saichaithanya0705"
+          cache: npm
+
+      - name: Verify release tag matches package version
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "v${PKG_VERSION}" != "${{ github.event.release.tag_name }}" ]; then
+            echo "Release tag ${{ github.event.release.tag_name }} does not match package.json version v${PKG_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Check whether version is already published to GitHub Packages
+        id: published
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "@saichaithanya0705/codex-quota-manager@${PKG_VERSION}" version --registry https://npm.pkg.github.com >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Version @saichaithanya0705/codex-quota-manager@${PKG_VERSION} is already on GitHub Packages. Skipping publish."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.published.outputs.already_published != 'true'
+        run: npm ci
+
+      - name: Build
+        if: steps.published.outputs.already_published != 'true'
+        run: npm run build
+
+      - name: Test
+        if: steps.published.outputs.already_published != 'true'
+        run: npm test
+
+      - name: Rewrite package metadata for GitHub Packages
+        if: steps.published.outputs.already_published != 'true'
+        shell: bash
+        run: |
+          npm pkg set name="@saichaithanya0705/codex-quota-manager"
+          npm pkg set publishConfig.registry="https://npm.pkg.github.com"
+          npm pkg delete publishConfig.access
+
+      - name: Publish scoped package to GitHub Packages
+        if: steps.published.outputs.already_published != 'true'
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

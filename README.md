@@ -31,6 +31,13 @@ npm install -g codex-quota-manager
 cqm
 ```
 
+Install from GitHub Packages:
+
+```bash
+npm install -g @saichaithanya0705/codex-quota-manager --registry=https://npm.pkg.github.com
+cqm
+```
+
 Clone and run from source:
 
 ```bash
@@ -58,6 +65,28 @@ Run after global install:
 
 ```bash
 cqm
+```
+
+## Install From GitHub Packages
+
+GitHub Packages uses the scoped package name `@saichaithanya0705/codex-quota-manager`.
+
+Configure the registry scope:
+
+```bash
+npm config set @saichaithanya0705:registry https://npm.pkg.github.com
+```
+
+Authenticate to GitHub Packages:
+
+```bash
+npm login --scope=@saichaithanya0705 --auth-type=legacy --registry=https://npm.pkg.github.com
+```
+
+Install the package:
+
+```bash
+npm install -g @saichaithanya0705/codex-quota-manager
 ```
 
 ## Use From Source
@@ -110,6 +139,7 @@ npm test
 - `src/`: TypeScript source for the CLI, auth, quota logic, and TUI
 - `test/`: Vitest coverage for paths, token parsing, quota mapping, and store behavior
 - `.github/workflows/`: CI, GitHub release, and npm publish automation
+- `CHANGELOG.md`: release history for published versions
 - `dist/`: generated build output used for the published CLI package
 
 ## Publishing
@@ -120,6 +150,7 @@ The package is structured for npm publication and GitHub-based releases:
 - The release workflow builds, tests, creates an npm tarball, and uploads it to the GitHub release.
 - Publishing the GitHub release triggers the npm publish workflow.
 - The npm workflow supports either trusted publishing via GitHub OIDC or a repository secret named `NPM_TOKEN`.
+- The GitHub Packages workflow publishes a scoped mirror package as `@saichaithanya0705/codex-quota-manager`.
 
 Recommended setup:
 
