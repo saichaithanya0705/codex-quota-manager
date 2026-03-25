@@ -14,10 +14,38 @@ This project is designed to work on Windows, macOS, and Linux. iOS is not a firs
 - Apply an account to Codex, OpenCode, or both
 - Preserve discovered accounts in the app-managed store
 
-## Install
+## Quick Start
+
+Use one of these paths depending on how you want to run the tool.
+
+Run once with `npx`:
 
 ```bash
-npm install
+npx --yes codex-quota-manager
+```
+
+Install globally:
+
+```bash
+npm install -g codex-quota-manager
+cqm
+```
+
+Clone and run from source:
+
+```bash
+git clone https://github.com/saichaithanya0705/codex-quota-manager.git
+cd codex-quota-manager
+npm ci
+npm run dev
+```
+
+## Install From npm
+
+Temporary use:
+
+```bash
+npx --yes codex-quota-manager
 ```
 
 Global install:
@@ -26,19 +54,44 @@ Global install:
 npm install -g codex-quota-manager
 ```
 
-## Run
+Run after global install:
 
-Development:
+```bash
+cqm
+```
+
+## Use From Source
+
+Clone the repository:
+
+```bash
+git clone https://github.com/saichaithanya0705/codex-quota-manager.git
+cd codex-quota-manager
+```
+
+Install dependencies:
+
+```bash
+npm ci
+```
+
+Run in development:
 
 ```bash
 npm run dev
 ```
 
-Build and run:
+Build and run the compiled CLI:
 
 ```bash
 npm run build
 npm start
+```
+
+You can also run the built entry directly:
+
+```bash
+node dist/cli.js
 ```
 
 ## Test
@@ -46,6 +99,11 @@ npm start
 ```bash
 npm test
 ```
+
+## Requirements
+
+- Node.js 20 or later
+- npm 10 or later
 
 ## Package Layout
 
